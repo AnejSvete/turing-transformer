@@ -3,7 +3,7 @@ from typing import Tuple
 from sympy import Rational
 import sympy as sp
 
-from turnformer.transformer.symbol_encoding import Embedding
+from turnformer.transformer.symbol_embedding import Embedding
 
 
 class Encoder:
