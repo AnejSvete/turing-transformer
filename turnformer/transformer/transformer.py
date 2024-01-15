@@ -1,11 +1,9 @@
-from typing import Callable, Sequence
+from typing import Callable, List, Sequence
 
 import numpy as np
 
-from rayuela.nn.rnn.utils import to_compatible_string
 
-
-class Attention:
+class AttentionHead:
     """A class implementing the attention mechanism."""
 
     def __init__(
@@ -15,6 +13,7 @@ class Attention:
         V: Callable[[np.ndarray], np.ndarray],
         f: Callable[[np.ndarray], np.ndarray],
         projection: Callable[[np.ndarray], np.ndarray],
+        O: Callable[[np.ndarray], np.ndarray],  # noqa: E741, E743
     ):
         self.Q = Q
         self.K = K
@@ -22,6 +21,8 @@ class Attention:
 
         self.f = f
         self.projection = projection
+
+        self.O = O  # noqa: E741, E743
 
     def __call__(self, X: np.ndarray) -> np.ndarray:
         """Applies the attention mechanism to the input X, where the query is
@@ -41,33 +42,34 @@ class Attention:
 
         T = X.shape[0]
         s = self.projection(np.asarray([self.f(q, K[t, :]) for t in range(T)]))
-        print(f"s = {s}")
+        # print(f"s = {s}")
         a = np.dot(s, V)
-        print(f"X = {X}")
-        print(f"q = {q}")
-        print(f"K = {K}")
-        print(f"V = {V}")
-        print(f"a = {a}")
+        # print(f"X = {X}")
+        # print(f"q = {q}")
+        # print(f"K = {K}")
+        # print(f"V = {V}")
+        # print(f"a = {a}")
 
-        return a
+        # z = self.O(a) + a
+        z = self.O(a)
+
+        # print(f"z = {z}")
+
+        return z
 
 
-class TransformerLayer:
+class MultiHeadAttentionLayer:
     """A class implementing a single layer of the Transformer network based on the
-    Attention mechanism class.
+    AttentionHead mechanism class.
     """
 
     def __init__(
         self,
-        Q: Callable[[np.ndarray], np.ndarray],
-        K: Callable[[np.ndarray], np.ndarray],
-        V: Callable[[np.ndarray], np.ndarray],
-        f: Callable[[np.ndarray], np.ndarray],
-        projection: Callable[[np.ndarray], np.ndarray],
-        O: Callable[[np.ndarray], np.ndarray],  # noqa: E741, E743
+        heads: List[AttentionHead],
+        fH: Callable[[np.ndarray], np.ndarray],
     ):
-        self.A = Attention(Q, K, V, f, projection)
-        self.O = O  # noqa: E741, E743
+        self.heads = heads
+        self.fH = fH
 
     def __call__(self, X: np.ndarray) -> np.ndarray:
         """Applies the Transformer layer to the input X.
@@ -81,13 +83,15 @@ class TransformerLayer:
 
         T = X.shape[0]
 
-        # ! I think this simulates the whole execution of the automaton
-        # ! at every time step, so this could be made more efficient
-        # A = np.vstack([self.A(X[: t + 1, :]) + X[t, :] for t in range(T)])
-        A = np.vstack([self.A(X[: t + 1, :]) for t in range(T)])
+        Zs = []
+        for h, H in enumerate(self.heads):  # Iterate over the heads
+            # ! I think this simulates the whole execution of the automaton
+            # ! at every time step, so this could be made more efficient
+            # Zs.append(np.vstack([H(X[: t + 1, :]) + X[t, :] for t in range(T)]))
+            Zs.append(np.vstack([H(X[: t + 1, :]) for t in range(T)]))
+            print()
 
-        # Z = self.O(A) + A
-        Z = self.O(A)
+        Z = self.fH(np.hstack(Zs))
 
         return Z
 
@@ -97,18 +101,18 @@ class Transformer:
 
     def __init__(
         self,
-        layers: Sequence[TransformerLayer],
+        layers: Sequence[MultiHeadAttentionLayer],
         F: Callable[[np.ndarray], np.ndarray],
         encoding: Callable[[str], np.ndarray],
         positional_encoding: Callable[[int], np.ndarray],
-        S: np.ndarray,
+        R: np.ndarray,
         Tf,
     ):
         self.layers = layers
         self.F = F
         self.encoding = encoding
         self.positional_encoding = positional_encoding
-        self.S = S
+        self.R = R
         self.Tf = Tf
 
     def __call__(self, y: str) -> np.ndarray:
@@ -121,11 +125,19 @@ class Transformer:
             np.ndarray: The output of the Transformer layer.  # TODO
         """
 
-        X = np.concatenate([self.encoding(y[0]), self.positional_encoding(0), self.S])
-        print(f"Xi.shape = {X.shape}")
-        print(f"Xi = {X}")
+        X = np.concatenate(
+            [
+                self.encoding(y[0]),
+                self.positional_encoding(0),
+                self.R,
+                np.zeros((self.R.shape[0])),
+            ]
+        )
+        X = X.reshape((-1, len(X)))
+        print(f"X0.shape = {X.shape}")
+        self.Tf.display_hidden_state(X)
 
-        for t, yt in enumerate(to_compatible_string(y[1:])):
+        for t, yt in enumerate(y[1:]):
             X = np.vstack(
                 [
                     X,
@@ -133,30 +145,29 @@ class Transformer:
                         [
                             self.encoding(yt),
                             self.positional_encoding(t + 1),
-                            np.zeros((self.S.shape[0])),
+                            np.zeros((self.R.shape[0])),
+                            np.zeros((self.R.shape[0])),
                         ]
                     ),
                 ]
             )
 
-            print(f"X{t}.shape = {X.shape}")
-            print(f"X{t} = {X}")
+            print(f"X{t + 1}.shape = {X.shape}")
+            print(X.astype(np.int_))
+            self.Tf.display_hidden_state(X)
 
             Z = X
             for ll, layer in enumerate(self.layers):
                 print(f"Layer {ll}")
                 Z = layer(Z)
-                if ll == 0:  # TODO
-                    P = np.vstack([self.positional_encoding(i) for i in range(t + 2)])
-                    Z = np.hstack([Z, P])
 
-            X[-1, -self.S.shape[0] :] = Z[-1, :]
+            X[-1, :] = Z[-1, :]
             print("STATES")
             for i in range(X.shape[0]):
-                print(f"state {i}: {self.Tf.eq2q(X[i, -self.S.shape[0] :])}")
+                print(f"state {i}: {self.Tf.eq2q(X[i, :])}")
             print("SYMBOLS")
             for i in range(X.shape[0]):
-                print(f"symbol {i}: {self.Tf.ey2y(X[i, : self.Tf.n_symbols + 1])}")
+                print(f"symbol {i}: {self.Tf.ey2y(X[i, :])}")
             print()
             print()
 
