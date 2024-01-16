@@ -22,8 +22,8 @@ class Action(IntEnum):
 class SingleStackPDA:
     def __init__(
         self,
-        Σ: set = {"a", "b"},
-        Γ: set = {BOT, "0", "1"},
+        Σ: list = ["a", "b"],
+        Γ: list = [BOT, "0", "1"],
         n_states: int = 1,
         seed: int = 42,
         randomize: bool = True,
@@ -94,7 +94,7 @@ class SingleStackPDA:
         output += "Transition Probabilities:\n"
         for q, γ, a in product(self.Q, self.Γ, self.Σ):
             (qʼ, action, γʼ), p = self.δ[q][a][γ]
-            output += f"q{q} -({a}, {γ})→ q{qʼ} ({action}, {γʼ}): {p}\n"
+            output += f"q{q} -({a}, {γ})→ q{qʼ} ({action}, {γʼ}): {p:.3f}\n"
         output += "\n"
 
         # Probabilistic PDA status
@@ -142,7 +142,7 @@ class SingleStackPDA:
         """Initializes a random transition function and with it a random PPDA."""
         rng = np.random.default_rng(self.seed)
 
-        pushes = list((Action.PUSH, γ) for γ in (self.Γ - {BOT}))
+        pushes = list((Action.PUSH, γ) for γ in self.Γ if γ != BOT)
 
         for q, γ in product(self.Q, self.Γ):
             # The possible actions have to form a probability distribution

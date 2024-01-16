@@ -41,29 +41,26 @@ class FiniteStateTransform:
         self.D1 = self.n_symbols + 1
         self.D2 = 2
         self.D3 = self.n_states
-        self.D4 = self.n_states
-        self.D5 = self.n_states * (self.n_symbols + 1)
+        self.D4 = self.n_states * (self.n_symbols + 1)
 
         self.C1 = self.D1
         self.C2 = self.D1 + self.D2
         self.C3 = self.D1 + self.D2 + self.D3
         self.C4 = self.D1 + self.D2 + self.D3 + self.D4
-        self.C5 = self.D1 + self.D2 + self.D3 + self.D4 + self.D5
 
-        self.D = self.D1 + self.D2 + self.D3 + self.D4 + self.D5
+        self.D = self.D1 + self.D2 + self.D3 + self.D4
 
         # The hidden states have the organization:
         # [
         #   one-hot(yt)                 # |Sigma| + 1
         #   positional encoding,        # 2
         #   one-hot(qt-1)               # |Q|
-        #   one-hot(qt-1)               # |Q|
-        #   one-hot(qt-1, yt)               # |Q| * (|Sigma| + 1)
+        #   one-hot(qt-1, yt)           # |Q| * (|Sigma| + 1)  [processing, temporary]
         # ]
 
         self.construct()
 
-    def display_hidden_state(self, X: np.ndarray) -> None:  # noqa: C901
+    def display_hidden_state(self, X: np.ndarray) -> None:
         print()
         for i, x in enumerate(X):
             for j in range(self.n_symbols + 1):
@@ -74,9 +71,7 @@ class FiniteStateTransform:
             if x[self.C2 : self.C3].sum() > 0:
                 print(f"q_{i}: {self.s_inv[np.argmax(x[self.C2: self.C3])]}")
             if x[self.C3 : self.C4].sum() > 0:
-                print(f"q'_{i}: {self.s_inv[np.argmax(x[self.C3: self.C4])]}")
-            if x[self.C4 : self.C5].sum() > 0:
-                print(f"q'_{i},y': {self.n_inv[np.argmax(x[self.C4: self.C5])]}")
+                print(f"q'_{i},y': {self.n_inv[np.argmax(x[self.C3: self.C4])]}")
             print("---------")
 
     def set_up_orderings(self):
@@ -115,7 +110,7 @@ class FiniteStateTransform:
         return y
 
     def e2qy(self, x: np.ndarray) -> Tuple[State, str]:
-        return self.n_inv[np.argmax(x[self.C4 : self.C5])]
+        return self.n_inv[np.argmax(x[self.C3 : self.C4])]
 
     def eq2q(self, x: np.ndarray) -> State:
         return self.s_inv[np.argmax(x[self.C2 : self.C3])]
@@ -123,20 +118,20 @@ class FiniteStateTransform:
     def ey2y(self, x: np.ndarray) -> str:
         return self.m_inv[np.argmax(x[: self.C1])]
 
-    def initial_static_encoding(self, y: str) -> np.ndarray:
+    def initial_static_encoding(self, y: str, t: int) -> np.ndarray:
         X0 = np.concatenate(
             [
                 self.one_hot(y),
-                self.positional_encoding(0),
-                self.one_hot(self.q0),
-                np.zeros(self.n_states),
+                self.positional_encoding(t),
+                self.one_hot(self.q0) if t == 0 else np.zeros(self.n_states),
                 np.zeros(self.n_states * (self.n_symbols + 1)),
             ]
         )
+
         return X0
 
     def positional_encoding(self, t: int) -> np.ndarray:
-        return np.asarray([1, t])
+        return np.asarray([1, t + 1])
 
     def construct_transition_gates(self) -> Tuple[np.ndarray, np.ndarray]:
         W = np.zeros((self.D, self.D))
@@ -144,11 +139,11 @@ class FiniteStateTransform:
         for q in self.A.Q:
             for y, qʼ, _ in self.A.arcs(q):
                 _w, _b = construct_and(self.D, [self.m[str(y)], self.C2 + self.s[q]])
-                W[self.C4 + self.n[(qʼ, str(y))], :] = np.maximum(
-                    W[self.C4 + self.n[(qʼ, str(y))], :], _w.reshape((-1,))
+                W[self.C3 + self.n[(qʼ, str(y))], :] = np.maximum(
+                    W[self.C3 + self.n[(qʼ, str(y))], :], _w.reshape((-1,))
                 )
-                b[self.C4 + self.n[(qʼ, str(y))]] = np.minimum(
-                    _b, b[self.C4 + self.n[(qʼ, str(y))]]
+                b[self.C3 + self.n[(qʼ, str(y))]] = np.minimum(
+                    _b, b[self.C3 + self.n[(qʼ, str(y))]]
                 )
 
         return W, b
@@ -255,9 +250,9 @@ class FiniteStateTransform:
 
         P1 = np.zeros((self.D3, 2 * self.D))
         P1[:, self.C2 : self.C3] = np.eye(self.D3)
-        P2 = np.zeros((self.D5, 2 * self.D))
-        P2[:, -self.D5 :] = np.eye(self.D5)
-        O2 = np.zeros((self.n_states, self.D5))
+        P2 = np.zeros((self.D4, 2 * self.D))
+        P2[:, -self.D4 :] = np.eye(self.D4)
+        O2 = np.zeros((self.n_states, self.D4))
         for q, y in product(self.A.Q, self.SigmaEOS):
             O2[self.s[q], self.n[(q, y)]] = 1
 

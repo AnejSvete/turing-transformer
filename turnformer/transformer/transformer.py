@@ -129,26 +129,13 @@ class Transformer:
         if len(y) == 0:
             return self.F(self.X0(y)).T
 
-        X = self.X0(y[0])
+        X = self.X0(y[0], 0)
         X = X.reshape((-1, len(X)))
         # print(f"X0.shape = {X.shape}")
         # self.Tf.display_hidden_state(X)
 
         for t, yt in enumerate(y[1:]):
-            X = np.vstack(
-                [
-                    X,
-                    np.concatenate(
-                        [
-                            self.encoding(yt),
-                            self.positional_encoding(t + 1),
-                            np.zeros(self.Tf.n_states),  # TODO
-                            np.zeros(self.Tf.n_states),
-                            np.zeros(self.Tf.D5),
-                        ]
-                    ),
-                ]
-            )
+            X = np.vstack([X, self.X0(yt, t + 1)])
 
             # print(f"X{t + 1}.shape = {X.shape}")
             # self.Tf.display_hidden_state(X)
