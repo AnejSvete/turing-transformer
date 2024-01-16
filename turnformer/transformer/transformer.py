@@ -2,6 +2,8 @@ from typing import Callable, List, Sequence
 
 import numpy as np
 
+from turnformer.base.symbols import EOS
+
 
 class AttentionHead:
     """A class implementing the attention mechanism."""
@@ -186,7 +188,7 @@ class TransfomerLM:
             logp += logpt
 
         zt = self.T(y + y[-1])
-        logpEOS = (self.E[:, zt.argmax()])[self.T.encoding(".").argmax()]
+        logpEOS = (self.E[:, zt.argmax()])[self.T.encoding(EOS).argmax()]
         # print(f"qT = {self.T.Tf.s_inv[np.argmax(zt)]}")
         # print(f"logpEOS = {logpEOS}")
         # print(f"pEOS = {np.exp(logpEOS)}")

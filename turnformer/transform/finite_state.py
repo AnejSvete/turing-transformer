@@ -7,6 +7,7 @@ from rayuela.fsa.state import State
 
 from turnformer.base.F import H, ProjectionFunctions, ReLU
 from turnformer.base.modules import construct_and
+from turnformer.base.symbols import EOS
 from turnformer.transformer.transformer import (
     AttentionHead,
     MultiHeadAttentionLayer,
@@ -34,7 +35,7 @@ class FiniteStateTransform:
         self.A = A
         self.q0 = list(self.A.I)[0][0]
         self.Sigma = [str(a) for a in self.A.Sigma]
-        self.SigmaEOS = self.Sigma + ["."]
+        self.SigmaEOS = self.Sigma + [EOS]
         self.n_states, self.n_symbols = len(self.A.Q), len(self.Sigma)
 
         self.D1 = self.n_symbols + 1
@@ -57,6 +58,7 @@ class FiniteStateTransform:
         #   positional encoding,        # 2
         #   one-hot(qt-1)               # |Q|
         #   one-hot(qt-1)               # |Q|
+        #   one-hot(qt-1, yt)               # |Q| * (|Sigma| + 1)
         # ]
 
         self.construct()
@@ -148,15 +150,6 @@ class FiniteStateTransform:
                 b[self.C4 + self.n[(qʼ, str(y))]] = np.minimum(
                     _b, b[self.C4 + self.n[(qʼ, str(y))]]
                 )
-
-        # for q, w in self.A.F:  # Transition onto itself upon reading the EOS symbol
-        #     _w, _b = construct_and(self.D, [self.m["."], self.C2 + self.s[q]])
-        #     W[self.C4 + self.n[(q, ".")], :] = np.maximum(
-        #         W[self.C4 + self.n[(q, ".")], :], _w.reshape((-1,))
-        #     )
-        #     b[self.C4 + self.n[(q, ".")]] = np.minimum(
-        #         _b, b[self.C4 + self.n[(q, ".")]]
-        #     )
 
         return W, b
 
@@ -296,7 +289,7 @@ class FiniteStateTransform:
         for q, w in self.A.F:
             # The final weight is an alternative "output" weight
             # for the final states.
-            E[self.m["."], self.s[q]] = np.log(w.value)
+            E[self.m[EOS], self.s[q]] = np.log(w.value)
 
         return E
 
