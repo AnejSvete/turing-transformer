@@ -10,6 +10,7 @@ from turnformer.base.modules import construct_and
 from turnformer.transformer.transformer import (
     AttentionHead,
     MultiHeadAttentionLayer,
+    TransfomerLM,
     Transformer,
 )
 
@@ -28,25 +29,27 @@ class FiniteStateTransform:
                 Defaults to "softmax".
         """
         assert A.deterministic, "The FSA must be deterministic."  # TODO
-        assert A.probabilistic, "The FSA must be probabilistic."  # TODO
+        assert A.probabilistic, "The FSA must be probabilistic."
 
         self.A = A
         self.q0 = list(self.A.I)[0][0]
         self.Sigma = [str(a) for a in self.A.Sigma]
-        self.SigmaEOS = self.Sigma + ["EOS"]
+        self.SigmaEOS = self.Sigma + ["."]
         self.n_states, self.n_symbols = len(self.A.Q), len(self.Sigma)
 
         self.D1 = self.n_symbols + 1
         self.D2 = 2
         self.D3 = self.n_states
         self.D4 = self.n_states
+        self.D5 = self.n_states * (self.n_symbols + 1)
 
         self.C1 = self.D1
         self.C2 = self.D1 + self.D2
         self.C3 = self.D1 + self.D2 + self.D3
         self.C4 = self.D1 + self.D2 + self.D3 + self.D4
+        self.C5 = self.D1 + self.D2 + self.D3 + self.D4 + self.D5
 
-        self.D = self.D1 + self.D2 + self.D3 + self.D4
+        self.D = self.D1 + self.D2 + self.D3 + self.D4 + self.D5
 
         # The hidden states have the organization:
         # [
@@ -58,26 +61,21 @@ class FiniteStateTransform:
 
         self.construct()
 
-    def display_hidden_state(self, X: np.ndarray) -> None:
+    def display_hidden_state(self, X: np.ndarray) -> None:  # noqa: C901
         print()
         for i, x in enumerate(X):
-            print(f"x{i}:")
-            print(f"\t{x[:self.C1].astype(np.int_)}")
-            print(f"\t{x[self.C1: self.C2].astype(np.int_)}")
-            if x[self.C2 : self.C3].sum() > 0:
-                print(f"\t{x[self.C2: self.C3].astype(np.int_)}")
-            if x[self.C3 :].sum() > 0:
-                print(f"\t{x[self.C3: ].astype(np.int_)}")
             for j in range(self.n_symbols + 1):
                 if x[j] == 1:
-                    print(f"y{i}: {self.SigmaEOS[j]}")
+                    print(f"y_{i}: {self.SigmaEOS[j]}")
                     break
-            print(f"p{i}: {int(x[self.C1 + 1])}")
+            print(f"p_{i}: {int(x[self.C1 + 1])}")
             if x[self.C2 : self.C3].sum() > 0:
-                print(f"q{i}: {self.s_inv[np.argmax(x[self.C2: self.C3])]}")
-            if x[self.C3 :].sum() > 0:
-                print(f"q'{i}: {self.s_inv[np.argmax(x[self.C3: ])]}")
-            print()
+                print(f"q_{i}: {self.s_inv[np.argmax(x[self.C2: self.C3])]}")
+            if x[self.C3 : self.C4].sum() > 0:
+                print(f"q'_{i}: {self.s_inv[np.argmax(x[self.C3: self.C4])]}")
+            if x[self.C4 : self.C5].sum() > 0:
+                print(f"q'_{i},y': {self.n_inv[np.argmax(x[self.C4: self.C5])]}")
+            print("---------")
 
     def set_up_orderings(self):
         # Ordering of Σ x Q
@@ -98,7 +96,9 @@ class FiniteStateTransform:
     def one_hot(self, x: Union[State, str, Tuple[State, str]]) -> np.ndarray:
         if isinstance(x, str):
             y = np.zeros((self.n_symbols + 1))
-            y[self.m[x]] = 1
+            if x != "":
+                # For the special cases of the beginning of the string or empty string
+                y[self.m[x]] = 1
             return y
         elif isinstance(x, State):
             y = np.zeros((self.n_states))
@@ -112,8 +112,8 @@ class FiniteStateTransform:
             raise TypeError
         return y
 
-    def e2qy(self, e: np.ndarray) -> Tuple[State, str]:
-        return self.n_inv[np.argmax(e)]
+    def e2qy(self, x: np.ndarray) -> Tuple[State, str]:
+        return self.n_inv[np.argmax(x[self.C4 : self.C5])]
 
     def eq2q(self, x: np.ndarray) -> State:
         return self.s_inv[np.argmax(x[self.C2 : self.C3])]
@@ -121,11 +121,17 @@ class FiniteStateTransform:
     def ey2y(self, x: np.ndarray) -> str:
         return self.m_inv[np.argmax(x[: self.C1])]
 
-    def initial_static_encoding(self) -> np.ndarray:
-        # _state = self.one_hot(self.q0)
-        # _symbol = self.one_hot(self.Sigma[0])
-        # return np.concatenate((_state, _symbol))
-        return self.one_hot(self.q0)
+    def initial_static_encoding(self, y: str) -> np.ndarray:
+        X0 = np.concatenate(
+            [
+                self.one_hot(y),
+                self.positional_encoding(0),
+                self.one_hot(self.q0),
+                np.zeros(self.n_states),
+                np.zeros(self.n_states * (self.n_symbols + 1)),
+            ]
+        )
+        return X0
 
     def positional_encoding(self, t: int) -> np.ndarray:
         return np.asarray([1, t])
@@ -135,15 +141,22 @@ class FiniteStateTransform:
         b = np.zeros((self.D))
         for q in self.A.Q:
             for y, qʼ, _ in self.A.arcs(q):
-                # print(f"q = {q}, y = {y}, qʼ = {qʼ}")
                 _w, _b = construct_and(self.D, [self.m[str(y)], self.C2 + self.s[q]])
-                # TODO; this should be state-symbol specific
-                W[self.C3 + self.s[qʼ], :] += _w.reshape((-1,))
-                b[self.C3 + self.s[qʼ]] += _b
-                # print(f"is = {self.m[str(y)], self.C2 + self.s[q]}")
-                # print(f"j = {self.C3 + self.s[qʼ]}")
-                # print(f"_w = {_w}")
-                # print(f"_b = {_b}")
+                W[self.C4 + self.n[(qʼ, str(y))], :] = np.maximum(
+                    W[self.C4 + self.n[(qʼ, str(y))], :], _w.reshape((-1,))
+                )
+                b[self.C4 + self.n[(qʼ, str(y))]] = np.minimum(
+                    _b, b[self.C4 + self.n[(qʼ, str(y))]]
+                )
+
+        # for q, w in self.A.F:  # Transition onto itself upon reading the EOS symbol
+        #     _w, _b = construct_and(self.D, [self.m["."], self.C2 + self.s[q]])
+        #     W[self.C4 + self.n[(q, ".")], :] = np.maximum(
+        #         W[self.C4 + self.n[(q, ".")], :], _w.reshape((-1,))
+        #     )
+        #     b[self.C4 + self.n[(q, ".")]] = np.minimum(
+        #         _b, b[self.C4 + self.n[(q, ".")]]
+        #     )
 
         return W, b
 
@@ -249,8 +262,11 @@ class FiniteStateTransform:
 
         P1 = np.zeros((self.D3, 2 * self.D))
         P1[:, self.C2 : self.C3] = np.eye(self.D3)
-        P2 = np.zeros((self.D3, 2 * self.D))
-        P2[:, -self.D4 :] = np.eye(self.D3)
+        P2 = np.zeros((self.D5, 2 * self.D))
+        P2[:, -self.D5 :] = np.eye(self.D5)
+        O2 = np.zeros((self.n_states, self.D5))
+        for q, y in product(self.A.Q, self.SigmaEOS):
+            O2[self.s[q], self.n[(q, y)]] = 1
 
         E = np.ones((self.D3, self.D3))
 
@@ -261,67 +277,51 @@ class FiniteStateTransform:
         W2[: self.C2, : self.C2] = np.eye(self.C2)
 
         def fH(Z):
-            # print("Z:")
-            # print(Z)
-            # print()
-
             v1 = (P1 @ Z.T).T
             v2 = (P2 @ Z.T).T
+            v2 = H(O2 @ v2.T).T  # This can be replaced by a composition of ReLUs
             Zʹ = v1 + H(v2 - (E @ v1.T).T)
 
-            # print("v1:")
-            # print(v1)
-            # print()
-            # print("v2:")
-            # print(v2)
-            # print()
-            # print("(E @ v1.T).T:")
-            # print((E @ v1.T).T)
-            # print()
-            # print("v2 - (E @ v1.T).T:")
-            # print(v2 - (E @ v1.T).T)
-            # print()
-            # print("H(v2 - (E @ v1.T).T):")
-            # print(H(v2 - (E @ v1.T).T))
-            # print()
+            return (W2 @ Z.T + W1 @ Zʹ.T).T
 
-            Zn = (W2 @ Z.T + W1 @ Zʹ.T).T
-            # print("Zn:")
-            # print(Zn.astype(np.int_))
-            # print()
-            return Zn
+        return MultiHeadAttentionLayer(heads=[H1, H2], fH=fH)
 
-        self.T1 = MultiHeadAttentionLayer(heads=[H1, H2], fH=fH)
-
-    def setup_output_matrix(self):
-        self.E = -np.inf * np.ones((self.n_symbols + 1, self.n_states))
+    def construct_output_matrix(self):
+        E = -np.inf * np.ones((self.n_symbols + 1, self.n_states))
 
         for q in self.A.Q:
             for a, _, w in self.A.arcs(q):
-                self.E[self.m[a], self.s[q]] = np.log(w.value)
+                E[self.m[str(a)], self.s[q]] = np.log(w.value)
 
         for q, w in self.A.F:
             # The final weight is an alternative "output" weight
             # for the final states.
-            self.E[self.m["EOS"], self.s[q]] = np.log(w.value)
+            E[self.m["."], self.s[q]] = np.log(w.value)
+
+        return E
 
     def construct(self):
         self.set_up_orderings()
 
         # Set up layer:
-        self.construct_layer()
+        MAH = self.construct_layer()
 
         # Set up the output matrix
-        # self.setup_output_matrix()
+        E = self.construct_output_matrix()
+
+        Wf = np.zeros((self.n_states, self.D))
+        Wf[:, self.C2 : self.C3] = np.eye(self.n_states)
 
         def F(x):
-            return x
+            return (Wf @ x.T).T
 
-        self.T = Transformer(
-            layers=[self.T1],
+        T = Transformer(
+            layers=[MAH],
             F=F,
             encoding=self.one_hot,
             positional_encoding=self.positional_encoding,
-            R=self.initial_static_encoding(),
+            X0=self.initial_static_encoding,
             Tf=self,
         )
+
+        self.lm = TransfomerLM(T, E)

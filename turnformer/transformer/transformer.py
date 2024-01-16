@@ -54,6 +54,7 @@ class AttentionHead:
         z = self.O(a)
 
         # print(f"z = {z}")
+        # print()
 
         return z
 
@@ -85,11 +86,9 @@ class MultiHeadAttentionLayer:
 
         Zs = []
         for h, H in enumerate(self.heads):  # Iterate over the heads
-            # ! I think this simulates the whole execution of the automaton
-            # ! at every time step, so this could be made more efficient
             # Zs.append(np.vstack([H(X[: t + 1, :]) + X[t, :] for t in range(T)]))
             Zs.append(np.vstack([H(X[: t + 1, :]) for t in range(T)]))
-            print()
+            # print()
 
         Z = self.fH(np.hstack(Zs))
 
@@ -105,14 +104,14 @@ class Transformer:
         F: Callable[[np.ndarray], np.ndarray],
         encoding: Callable[[str], np.ndarray],
         positional_encoding: Callable[[int], np.ndarray],
-        R: np.ndarray,
+        X0: Callable[[str], np.ndarray],
         Tf,
     ):
         self.layers = layers
         self.F = F
         self.encoding = encoding
         self.positional_encoding = positional_encoding
-        self.R = R
+        self.X0 = X0
         self.Tf = Tf
 
     def __call__(self, y: str) -> np.ndarray:
@@ -125,17 +124,13 @@ class Transformer:
             np.ndarray: The output of the Transformer layer.  # TODO
         """
 
-        X = np.concatenate(
-            [
-                self.encoding(y[0]),
-                self.positional_encoding(0),
-                self.R,
-                np.zeros((self.R.shape[0])),
-            ]
-        )
+        if len(y) == 0:
+            return self.F(self.X0(y)).T
+
+        X = self.X0(y[0])
         X = X.reshape((-1, len(X)))
-        print(f"X0.shape = {X.shape}")
-        self.Tf.display_hidden_state(X)
+        # print(f"X0.shape = {X.shape}")
+        # self.Tf.display_hidden_state(X)
 
         for t, yt in enumerate(y[1:]):
             X = np.vstack(
@@ -145,35 +140,34 @@ class Transformer:
                         [
                             self.encoding(yt),
                             self.positional_encoding(t + 1),
-                            np.zeros((self.R.shape[0])),
-                            np.zeros((self.R.shape[0])),
+                            np.zeros(self.Tf.n_states),  # TODO
+                            np.zeros(self.Tf.n_states),
+                            np.zeros(self.Tf.D5),
                         ]
                     ),
                 ]
             )
 
-            print(f"X{t + 1}.shape = {X.shape}")
-            print(X.astype(np.int_))
-            self.Tf.display_hidden_state(X)
+            # print(f"X{t + 1}.shape = {X.shape}")
+            # self.Tf.display_hidden_state(X)
 
             Z = X
             for ll, layer in enumerate(self.layers):
-                print(f"Layer {ll}")
                 Z = layer(Z)
 
             X[-1, :] = Z[-1, :]
-            print("STATES")
-            for i in range(X.shape[0]):
-                print(f"state {i}: {self.Tf.eq2q(X[i, :])}")
-            print("SYMBOLS")
-            for i in range(X.shape[0]):
-                print(f"symbol {i}: {self.Tf.ey2y(X[i, :])}")
-            print()
-            print()
+            # print("STATES")
+            # for i in range(X.shape[0]):
+            #     print(f"state {i}: {self.Tf.eq2q(X[i, :])}")
+            # print("SYMBOLS")
+            # for i in range(X.shape[0]):
+            #     print(f"symbol {i}: {self.Tf.ey2y(X[i, :])}")
+            # print()
+            # print()
 
             # At this point, X[-1, :] should contain the new state (of the automaton)
 
-        return self.F(X[-1, :])
+        return self.F(X[-1, :]).T
 
 
 class TransfomerLM:
@@ -182,4 +176,21 @@ class TransfomerLM:
         self.E = E
 
     def __call__(self, y: str) -> float:
-        ...
+        logp = 0
+        for t, yt in enumerate(y):
+            zt = self.T(y[: t + 1])
+            # print(f"qt = {self.T.Tf.s_inv[np.argmax(zt)]}")
+            logpt = (self.E[:, zt.argmax()])[self.T.encoding(yt).argmax()]
+            # print(f"logpt = {logpt}")
+            # print(f"pt = {np.exp(logpt)}")
+            logp += logpt
+
+        zt = self.T(y + y[-1])
+        logpEOS = (self.E[:, zt.argmax()])[self.T.encoding(".").argmax()]
+        # print(f"qT = {self.T.Tf.s_inv[np.argmax(zt)]}")
+        # print(f"logpEOS = {logpEOS}")
+        # print(f"pEOS = {np.exp(logpEOS)}")
+
+        logp += logpEOS
+
+        return logp
