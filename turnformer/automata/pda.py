@@ -33,6 +33,7 @@ class SingleStackPDA:
         self.Σ = Σ
         self.Γ = Γ
         self.Q = list(range(n_states))
+        self.actions = [Action.PUSH, Action.POP, Action.NOOP]
 
         # δ: Q × Σ × Γ → ((Q × {PUSH, POP, NOOP} × Γ) × R)
         self.δ = {q: {sym: {γ: {} for γ in self.Γ} for sym in self.Σ} for q in self.Q}
@@ -156,7 +157,10 @@ class SingleStackPDA:
                     if flip == 0:
                         self.δ[q][a][γ] = ((qʹ, Action.NOOP, γ), α[ii])
                     else:
-                        self.δ[q][a][γ] = ((qʹ,) + tuple(rng.choice(pushes)), α[ii])
+                        self.δ[q][a][γ] = (
+                            (qʹ,) + tuple(pushes[rng.choice(len(pushes))]),
+                            α[ii],
+                        )
                 else:
                     flip = rng.integers(0, 2, endpoint=True)
                     if flip == 0:
@@ -164,7 +168,10 @@ class SingleStackPDA:
                     elif flip == 1:
                         self.δ[q][a][γ] = ((qʹ, Action.POP, γ), α[ii])
                     else:
-                        self.δ[q][a][γ] = ((qʹ,) + tuple(rng.choice(pushes)), α[ii])
+                        self.δ[q][a][γ] = (
+                            (qʹ,) + tuple(pushes[rng.choice(len(pushes))]),
+                            α[ii],
+                        )
 
 
 class TwoStackPDA:

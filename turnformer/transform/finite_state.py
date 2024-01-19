@@ -240,10 +240,7 @@ class FiniteStateTransform:
         )
 
     def construct_layer(self):
-        """Construct the parameters of the first transformer block.
-        This layer is responsible for the computation of the previous state and
-        current input symbol one-hot encoding.
-        """
+        """Construct the parameters of the transformer block."""
 
         H1 = self.construct_copy_head()
         H2 = self.construct_transition_head()

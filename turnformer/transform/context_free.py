@@ -3,8 +3,8 @@ from typing import Tuple, Union
 
 import numpy as np
 
-from turnformer.automata.pda import SingleStackPDA
-from turnformer.base.F import ProjectionFunctions, ReLU
+from turnformer.automata.pda import Action, SingleStackPDA
+from turnformer.base.F import H, ProjectionFunctions, ReLU
 from turnformer.base.modules import construct_and
 from turnformer.base.symbols import BOT, EOS
 from turnformer.transformer.transformer import (
@@ -34,20 +34,47 @@ class ContextFreeTransform:
         self.Sigma = P.Σ
         self.SigmaEOS = self.Sigma + [EOS]
         self.Gamma = P.Γ
+        self.n_actions = len(self.P.actions)
         self.n_states, self.n_symbols = len(self.P.Q), len(self.Sigma)
         self.n_stack_symbols = len(self.Gamma)
 
-        self.D1 = self.n_symbols + 1  # One-hot encoding of the input symbol
-        self.D2 = 3  # Positional encoding
-        self.D3 = self.n_states  # One-hot encoding of the current state
-        self.D4 = self.n_stack_symbols  # One-hot encoding of the stack symbol
-        self.D5 = 1  # The action
-        # TEMPORARY, PROCESSING:
-        self.D6 = self.n_stack_symbols  # One-hot encoding of the next stack symbol
-        self.D7 = 3  # One-hot encoding of the next action
-        self.D8 = 1  # c
-        # One-hot encoding of the next state and current symbol pairs
-        self.D9 = self.n_states * (self.n_symbols + 1)
+        # The hidden states have the organization:
+        # [
+        #   INPUT
+        #       one-hot(y)                      # |Σ| + 1, 0 : C1
+        #       positional encoding,            # 3, C1 : C2
+        #   --------------------------------
+        #   CURRENT CONFIGURATION
+        #       one-hot(q↑)                     # |Q|, C2 : C3
+        #       c↑                              # 1, C3 : C4
+        #       l↑                              # 1, C4 : C5
+        #       one-hot(γ↑)                     # |Γ|, C5 : C6
+        #   --------------------------------
+        #   TRANSITION
+        #       one-hot(q↓)                     # |Q|, C6 : C7
+        #       one-hot(γ↓)                     # |Γ|, C7 : C8
+        #       one-hot(a↓)                     # |A|, C8 : C9
+        #   --------------------------------
+        #   TEMPORARY
+        #       one-hot(q↑, a↑, γ↑, y)          # |Q| * |A| * |Γ| * (|Σ| + 1), C9 : C10
+        # ]
+
+        # -------------------------
+        self.D1 = self.n_symbols + 1
+        self.D2 = 3
+        # ------------------
+        self.D3 = self.n_states
+        self.D4 = 1
+        self.D5 = 1
+        self.D6 = self.n_stack_symbols
+        # ------------------
+        self.D7 = self.n_states
+        self.D8 = self.n_stack_symbols
+        self.D9 = self.n_actions
+        self.D10 = (
+            self.n_states * self.n_actions * self.n_stack_symbols * (self.n_symbols + 1)
+        )
+        # -------------------------
 
         self.C1 = self.D1
         self.C2 = self.C1 + self.D2
@@ -58,22 +85,9 @@ class ContextFreeTransform:
         self.C7 = self.C6 + self.D7
         self.C8 = self.C7 + self.D8
         self.C9 = self.C8 + self.D9
+        self.C10 = self.C9 + self.D10
 
-        self.D = self.C9
-
-        # The hidden states have the organization:
-        # [
-        #   one-hot(yt)                 # |Sigma| + 1
-        #   positional encoding,        # 2
-        #   one-hot(qt-1)               # |Q|
-        #   one-hot(γt-1)               # |Γ|
-        #   at-1                        # 1
-        # TEMPORARY, PROCESSING:
-        #   one-hot(γt)                 # |Γ|
-        #   one-hot(at-1)               # 3
-        #   ct-1                        # 1
-        #   one-hot(qt-1, yt)           # |Q| * (|Sigma| + 1)
-        # ]
+        self.D = self.C10
 
         self.construct()
 
@@ -92,12 +106,14 @@ class ContextFreeTransform:
             print("---------")
 
     def set_up_orderings(self):
-        # Ordering of Σ x Q
+        # Ordering of Q x A x Γ x Σ
         self.n = dict()
         self.n_inv = dict()
-        for i, (q, a) in enumerate(product(self.P.Q, self.SigmaEOS)):
-            self.n[(q, a)] = i
-            self.n_inv[i] = (q, a)
+        for i, (q, a, γ, y) in enumerate(
+            product(self.P.Q, self.P.actions, self.P.Γ, self.P.Σ)
+        ):
+            self.n[(q, a, γ, y)] = i
+            self.n_inv[i] = (q, a, γ, y)
 
         # Ordering of Σbar
         self.m = {a: i for i, a in enumerate(self.SigmaEOS)}
@@ -110,6 +126,10 @@ class ContextFreeTransform:
         # Ordering of Γ
         self.g = {γ: i for i, γ in enumerate(self.Gamma)}
         self.g_inv = {i: γ for i, γ in enumerate(self.Gamma)}
+
+        # Ordering of A
+        self.a = {a: i for i, a in enumerate(self.P.actions)}
+        self.a_inv = {i: a for i, a in enumerate(self.P.actions)}
 
     def one_hot(
         self, x: Union[int, str, Tuple[int, str]], component: str
@@ -132,12 +152,13 @@ class ContextFreeTransform:
             y = np.zeros((self.n_stack_symbols))
             y[self.g[x]] = 1
             return y
+        elif component == "action":
+            y = np.zeros((self.n_actions))
+            y[self.a[x]] = 1
+            return y
         else:
             raise TypeError
         return y
-
-    def e2qy(self, x: np.ndarray) -> Tuple[int, str]:
-        return self.n_inv[np.argmax(x[-self.D6 :])]
 
     def eq2q(self, x: np.ndarray) -> int:
         return self.s_inv[np.argmax(x[self.C2 : self.C3])]
@@ -150,13 +171,18 @@ class ContextFreeTransform:
             [
                 self.one_hot(y, "symbol"),
                 self.positional_encoding(t),
-                self.one_hot(self.q0, "state") if t == 0 else np.zeros(self.n_states),
-                self.one_hot(BOT, "stack"),
-                np.asarray([1]),
+                # ----------------------------
+                np.zeros(self.n_states),
+                np.zeros(1),
+                np.zeros(1),
                 np.zeros(self.n_stack_symbols),
-                np.zeros(self.D7),
-                np.zeros(self.D8),
-                np.zeros(self.n_states * (self.n_symbols + 1)),
+                # ----------------------------
+                self.one_hot(self.q0, "state") if t == 0 else np.zeros(self.n_states),
+                self.one_hot(BOT, "stack")
+                if t == 0
+                else np.zeros(self.n_stack_symbols),
+                np.zeros(self.n_actions),
+                np.zeros(self.D10),
             ]
         )
 
@@ -174,21 +200,6 @@ class ContextFreeTransform:
             return np.asarray([0])
         else:
             raise ValueError
-
-    def construct_transition_gates(self) -> Tuple[np.ndarray, np.ndarray]:
-        W = np.zeros((self.D, self.D))
-        b = np.zeros((self.D))
-        for q in self.A.Q:
-            for y, qʼ, _ in self.A.arcs(q):
-                _w, _b = construct_and(self.D, [self.m[str(y)], self.C2 + self.s[q]])
-                W[self.C3 + self.n[(qʼ, str(y))], :] = np.maximum(
-                    W[self.C3 + self.n[(qʼ, str(y))], :], _w.reshape((-1,))
-                )
-                b[self.C3 + self.n[(qʼ, str(y))]] = np.minimum(
-                    _b, b[self.C3 + self.n[(qʼ, str(y))]]
-                )
-
-        return W, b
 
     def construct_copy_head(self) -> AttentionHead:
         """Construct a transformer head that simply copies the content of the tape.
@@ -232,9 +243,54 @@ class ContextFreeTransform:
             O=O,
         )
 
-    def construct_stack_top_head(self) -> AttentionHead:
-        """Construct a transformer head that computes the position
-        of the top stack symbol.
+    def construct_state_lookup_head(self) -> AttentionHead:
+        """Constructs the transformer head that looks up the state the previous time
+        step transitioned into, i.e., the current state.
+
+        Returns:
+            AttentionHead: The transformer head.
+        """
+        Wq = np.zeros((2, self.D))
+        Wq[:, self.C1 : self.C1 + 2] = np.eye(2)
+        bq = np.asarray([0, -1])
+
+        Wk = np.zeros((2, self.D))
+        P = np.zeros((2, 2))
+        P[0, 1] = -1
+        P[1, 0] = 1
+        Wk[:, self.C1 : self.C1 + 2] = P
+
+        # Copy the target state into the source state
+        Wv = np.zeros((self.D, self.D))
+        Wv[self.C2 : self.C3, self.C6 : self.C7] = np.eye(self.n_states)
+
+        def Q(X):
+            return (Wq @ X.T).T + bq
+
+        def K(X):
+            return (Wk @ X.T).T
+
+        def V(X):
+            return (Wv @ X.T).T
+
+        def f(q, k):
+            return -np.abs(np.dot(q, k.T))
+
+        def O(X):  # noqa: E741, E743
+            return X
+
+        return AttentionHead(
+            Q=Q,
+            K=K,
+            V=V,
+            f=f,
+            projection=ProjectionFunctions.unique_hard,
+            O=O,
+        )
+
+    def construct_positions_written_head(self) -> AttentionHead:
+        """Construct a transformer head that computes the *stack* positions
+        of where each time step wrote to.
 
         Returns:
             AttentionHead: The transformer head.
@@ -242,7 +298,8 @@ class ContextFreeTransform:
         Wq = np.zeros((1, self.D))
         Wk = np.zeros((1, self.D))
         Wv = np.zeros((self.D, self.D))
-        Wv[-self.D9 - 1, self.C4] = 1
+        Wv[self.C3, self.C8 + self.a[Action.PUSH]] = 1
+        Wv[self.C3, self.C8 + self.a[Action.POP]] = -1
 
         def Q(X):
             return (Wq @ X.T).T
@@ -268,30 +325,29 @@ class ContextFreeTransform:
             O=O,
         )
 
-    def construct_transition_head(self) -> AttentionHead:
-        """Constructs the transformer head that computes the next state of the FSA
-        given the current state and the input symbol.
+    def construct_stack_top_lookup_head(self) -> AttentionHead:
+        """Construct a transformer head that computes the *string* position
+        when the stack was written to last time.
 
         Returns:
             AttentionHead: The transformer head.
         """
         Wq = np.zeros((2, self.D))
-        Wq[:, self.C1 : self.C2] = np.eye(2)
-        bq = np.asarray([0, -1])
+        Wq[0, self.C1 + 1] = 1
+        bq = np.asarray([0, 1])
 
         Wk = np.zeros((2, self.D))
-        P = np.zeros((2, 2))
-        P[0, 1] = -1
-        P[1, 0] = 1
-        Wk[:, self.C1 : self.C2] = P
+        Wk[1, self.C3] = 1
+        bk = np.asarray([1, 0])
 
-        Wv = np.eye(self.D)
+        Wv = np.zeros((self.D, self.D))
+        Wv[self.C5 : self.C6, self.C7 : self.C8] = np.eye(self.n_stack_symbols)
 
         def Q(X):
             return (Wq @ X.T).T + bq
 
         def K(X):
-            return (Wk @ X.T).T
+            return (Wk @ X.T).T + bk
 
         def V(X):
             return (Wv @ X.T).T
@@ -299,10 +355,8 @@ class ContextFreeTransform:
         def f(q, k):
             return -np.abs(np.dot(q, k.T))
 
-        Wo, bo = self.construct_transition_gates()
-
         def O(X):  # noqa: E741, E743
-            return ReLU((Wo @ X.T).T + bo)
+            return X
 
         return AttentionHead(
             Q=Q,
@@ -313,43 +367,95 @@ class ContextFreeTransform:
             O=O,
         )
 
-    def construct_layer(self):
-        """Construct the parameters of the first transformer block.
-        This layer is responsible for the computation of the previous state and
-        current input symbol one-hot encoding.
-        """
+    def construct_layer_1(self):
+        """Construct the parameters of the first transformer block."""
 
         H1 = self.construct_copy_head()
-        H2 = self.construct_stack_top_head()
-        # H2 = self.construct_transition_head()
+        H2 = self.construct_positions_written_head()
+        heads = [H1, H2]
 
-        # P1 = np.zeros((self.D3, 2 * self.D))
-        # P1[:, self.C2 : self.C3] = np.eye(self.D3)
-        # P2 = np.zeros((self.D4, 2 * self.D))
-        # P2[:, -self.D4 :] = np.eye(self.D4)
-        # O2 = np.zeros((self.n_states, self.D4))
-        # for q, y in product(self.P.Q, self.SigmaEOS):
-        #     O2[self.s[q], self.n[(q, y)]] = 1
-
-        # E = np.ones((self.D3, self.D3))
-
-        # W1 = np.zeros((self.D, self.D3))
-        # W1[self.C2 : self.C3, :] = np.eye(self.D3)
-
-        # W2 = np.zeros((self.D, 2 * self.D))
-        # W2[: self.C2, : self.C2] = np.eye(self.C2)
+        Wh = np.zeros((self.D, len(heads) * self.D))
+        # Copy over all existing information
+        Wh[: self.D, : self.D] = np.eye(self.D)
+        # Copy over the new information about the stack writing positions
+        Wh[self.C3, self.D + self.C3] = 1
 
         def fH(Z):
-            # v1 = (P1 @ Z.T).T
-            # v2 = (P2 @ Z.T).T
-            # v2 = H(O2 @ v2.T).T  # This can be replaced by a composition of ReLUs
-            # Zʹ = v1 + H(v2 - (E @ v1.T).T)
+            return (Wh @ Z.T).T
 
-            # return (W2 @ Z.T + W1 @ Zʹ.T).T
+        return MultiHeadAttentionLayer(heads=heads, fH=fH)
 
-            return Z
+    def construct_transition_gates(self) -> Tuple[np.ndarray, np.ndarray]:
+        W = np.zeros((self.D, 3 * self.D))
+        b = np.zeros((self.D))
+        for q, γ, y in product(self.P.Q, self.P.Γ, self.P.Σ):
+            (qʼ, action, γʼ), _ = self.P.δ[q][y][γ]
+            _w, _b = construct_and(
+                3 * self.D,
+                [
+                    self.m[y],  # Symbol information from the copy head
+                    # State information from the state head
+                    self.D + self.C2 + self.s[q],
+                    # Stack information from the stack head
+                    2 * self.D + self.C5 + self.g[γ],
+                ],
+            )
+            s = (qʼ, action, γʼ, y)
+            W[self.C9 + self.n[s], :] = np.maximum(
+                W[self.C9 + self.n[s], :], _w.reshape((-1,))
+            )
+            b[self.C9 + self.n[s]] = np.minimum(_b, b[self.C9 + self.n[s]])
 
-        return MultiHeadAttentionLayer(heads=[H1, H2], fH=fH)
+        return W, b
+
+    def construct_layer_2_combine_parameters(self):
+        Wo, bo = self.construct_transition_gates()
+
+        def transition(Z):
+            return ReLU((Wo @ Z.T).T + bo)
+
+        # Check if the state is already present on the tape
+        P = np.zeros((self.n_states, 3 * self.D))
+        P[:, self.C6 : self.C7] = np.eye(self.n_states)
+        # Produces a "mask" of 1s if the state is already present on the tape
+        E = np.ones((self.D, self.n_states))
+
+        # Decode the new state, action, and stack symbol from the transition head
+        U = np.zeros((self.D, self.D))
+        for q, a, γ, y in product(self.P.Q, self.P.actions, self.P.Γ, self.P.Σ):
+            U[self.C6 + self.s[q], self.n[(q, a, γ, y)]] = 1
+            U[self.C7 + self.g[γ], self.n[(q, a, γ, y)]] = 1
+            U[self.C8 + self.a[a], self.n[(q, a, γ, y)]] = 1
+
+        # Copy the old information
+        # If some fields are empty, they will be filled in by the addition
+        # If they are not empty, the added vectors will be zero
+        Wh = np.zeros((self.D, 3 * self.D))
+        Wh[: self.C9, : self.C9] = np.eye(self.C9)
+
+        def combine(Z_original, Z_transitioned):
+            multi_hot = H(U @ Z_transitioned.T).T
+            mask = (E @ P @ Z_original.T).T
+            masked_multi_hot = H(multi_hot - mask)
+
+            return (Wh @ Z_original.T).T + masked_multi_hot
+
+        return transition, combine
+
+    def construct_layer_2(self):
+        """Construct the parameters of the second transformer block."""
+
+        H1 = self.construct_copy_head()
+        H2 = self.construct_state_lookup_head()
+        H3 = self.construct_stack_top_lookup_head()
+        heads = [H1, H2, H3]
+
+        (transition, combine) = self.construct_layer_2_combine_parameters()
+
+        def fH(Z):
+            return combine(Z, transition(Z))
+
+        return MultiHeadAttentionLayer(heads=heads, fH=fH)
 
     def construct_output_matrix(self):
         E = -np.inf * np.ones((self.n_symbols + 1, self.n_states))
@@ -368,20 +474,22 @@ class ContextFreeTransform:
     def construct(self):
         self.set_up_orderings()
 
-        # Set up layer:
-        MAH = self.construct_layer()
+        # Set up layers:
+        MAH_1 = self.construct_layer_1()
+        MAH_2 = self.construct_layer_2()
 
         # Set up the output matrix
         # E = self.construct_output_matrix()
 
-        Wf = np.zeros((self.n_states, self.D))
-        Wf[:, self.C2 : self.C3] = np.eye(self.n_states)
+        # Wf = np.zeros((self.n_states, self.D))
+        # Wf[:, self.C2 : self.C3] = np.eye(self.n_states)
+        Wf = np.eye(self.D)
 
         def F(x):
             return (Wf @ x.T).T
 
         T = Transformer(
-            layers=[MAH],
+            layers=[MAH_1, MAH_2],
             F=F,
             encoding=self.one_hot,
             positional_encoding=self.positional_encoding,

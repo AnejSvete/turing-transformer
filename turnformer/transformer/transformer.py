@@ -44,12 +44,12 @@ class AttentionHead:
 
         T = X.shape[0]
         s = self.projection(np.asarray([self.f(q, K[t, :]) for t in range(T)]))
-        # print(f"s = {s}")
+        print(f"s = {s}")
         a = np.dot(s, V)
         # print(f"X = {X}")
         # print(f"q = {q}")
         # print(f"K = {K}")
-        # print(f"V = {V}")
+        print(f"V = {V}")
         # print(f"a = {a}")
 
         # z = self.O(a) + a
@@ -131,18 +131,19 @@ class Transformer:
 
         X = self.X0(y[0], 0)
         X = X.reshape((-1, len(X)))
-        # print(f"X0.shape = {X.shape}")
-        # self.Tf.display_hidden_state(X)
+        print(f"X0.shape = {X.shape}")
+        self.Tf.display_hidden_state(X)
 
         for t, yt in enumerate(y[1:]):
             X = np.vstack([X, self.X0(yt, t + 1)])
 
-            # print(f"X{t + 1}.shape = {X.shape}")
-            # self.Tf.display_hidden_state(X)
+            print(f"X{t + 1}.shape = {X.shape}")
+            self.Tf.display_hidden_state(X)
 
             Z = X
             for ll, layer in enumerate(self.layers):
                 Z = layer(Z)
+                print(f"Z{ll}.shape = {Z.shape}")
 
             X[-1, :] = Z[-1, :]
             # print("STATES")
