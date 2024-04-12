@@ -18,6 +18,9 @@ class Action(IntEnum):
         action_names = {Action.PUSH: "PUSH", Action.POP: "POP", Action.NOOP: "NOOP"}
         return action_names[self]
 
+    def __repr__(self):
+        return str(self)
+
 
 class SingleStackPDA:
     def __init__(
@@ -33,7 +36,8 @@ class SingleStackPDA:
         self.Σ = Σ
         self.Γ = Γ
         self.Q = list(range(n_states))
-        self.actions = [Action.PUSH, Action.POP, Action.NOOP]
+        # self.actions = [Action.PUSH, Action.POP, Action.NOOP]
+        self.actions = [Action.PUSH, Action.POP]
 
         # δ: Q × Σ × Γ → ((Q × {PUSH, POP, NOOP} × Γ) × R)
         self.δ = {q: {sym: {γ: {} for γ in self.Γ} for sym in self.Σ} for q in self.Q}
@@ -153,25 +157,41 @@ class SingleStackPDA:
             for ii, a in enumerate(self.Σ):
                 qʹ = rng.integers(0, len(self.Q))
                 if γ == BOT:
-                    flip = rng.integers(0, 1, endpoint=True)
-                    if flip == 0:
-                        self.δ[q][a][γ] = ((qʹ, Action.NOOP, γ), α[ii])
+                    if len(self.actions) == 3:
+                        flip = rng.integers(0, 1, endpoint=True)
+                        if flip == 0:
+                            self.δ[q][a][γ] = ((qʹ, Action.NOOP, γ), α[ii])
+                        else:
+                            self.δ[q][a][γ] = (
+                                (qʹ,) + tuple(pushes[rng.choice(len(pushes))]),
+                                α[ii],
+                            )
                     else:
                         self.δ[q][a][γ] = (
                             (qʹ,) + tuple(pushes[rng.choice(len(pushes))]),
                             α[ii],
                         )
                 else:
-                    flip = rng.integers(0, 2, endpoint=True)
-                    if flip == 0:
-                        self.δ[q][a][γ] = ((qʹ, Action.NOOP, γ), α[ii])
-                    elif flip == 1:
-                        self.δ[q][a][γ] = ((qʹ, Action.POP, γ), α[ii])
+                    if len(self.actions) == 3:
+                        flip = rng.integers(0, 2, endpoint=True)
+                        if flip == 0:
+                            self.δ[q][a][γ] = ((qʹ, Action.NOOP, γ), α[ii])
+                        elif flip == 1:
+                            self.δ[q][a][γ] = ((qʹ, Action.POP, γ), α[ii])
+                        else:
+                            self.δ[q][a][γ] = (
+                                (qʹ,) + tuple(pushes[rng.choice(len(pushes))]),
+                                α[ii],
+                            )
                     else:
-                        self.δ[q][a][γ] = (
-                            (qʹ,) + tuple(pushes[rng.choice(len(pushes))]),
-                            α[ii],
-                        )
+                        flip = rng.integers(0, 1, endpoint=True)
+                        if flip == 1:
+                            self.δ[q][a][γ] = ((qʹ, Action.POP, γ), α[ii])
+                        else:
+                            self.δ[q][a][γ] = (
+                                (qʹ,) + tuple(pushes[rng.choice(len(pushes))]),
+                                α[ii],
+                            )
 
 
 class TwoStackPDA:

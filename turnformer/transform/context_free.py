@@ -42,7 +42,7 @@ class ContextFreeTransform:
         # [
         #   INPUT
         #       one-hot(y)                      # |Σ| + 1, 0 : C1
-        #       positional encoding,            # 3, C1 : C2
+        #       positional encoding,            # 4, C1 : C2
         #   --------------------------------
         #   CURRENT CONFIGURATION
         #       one-hot(q↑)                     # |Q|, C2 : C3
@@ -56,12 +56,12 @@ class ContextFreeTransform:
         #       one-hot(a↓)                     # |A|, C8 : C9
         #   --------------------------------
         #   TEMPORARY
-        #       one-hot(q↑, a↑, γ↑, y)          # |Q| * |A| * |Γ| * (|Σ| + 1), C9 : C10
+        #       one-hot(q↓, a↓, γ↓, y)          # |Q| * |A| * |Γ| * (|Σ| + 1), C9 : C10
         # ]
 
         # -------------------------
         self.D1 = self.n_symbols + 1
-        self.D2 = 3
+        self.D2 = 4
         # ------------------
         self.D3 = self.n_states
         self.D4 = 1
@@ -92,17 +92,24 @@ class ContextFreeTransform:
         self.construct()
 
     def display_hidden_state(self, X: np.ndarray) -> None:
-        print()
+        print("---------")
         for i, x in enumerate(X):
-            for j in range(self.n_symbols + 1):
-                if x[j] == 1:
-                    print(f"y_{i}: {self.SigmaEOS[j]}")
-                    break
+            print(f"y_{i}: {self.m_inv[np.argmax(x[: self.C1])]}")
             print(f"p_{i}: {int(x[self.C1 + 1])}")
             if x[self.C2 : self.C3].sum() > 0:
-                print(f"q_{i}: {self.s_inv[np.argmax(x[self.C2: self.C3])]}")
-            if x[self.C3 : self.C4].sum() > 0:
-                print(f"q'_{i},y': {self.n_inv[np.argmax(x[self.C3: self.C4])]}")
+                print(f"q↑_{i}: {self.s_inv[np.argmax(x[self.C2: self.C3])]}")
+            print(f"c↑_{i}: {x[self.C3]}")
+            print(f"l↑_{i}: {x[self.C4]}")
+            if x[self.C5 : self.C6].sum() > 0:
+                print(f"γ↑_{i}: {self.g_inv[np.argmax(x[self.C5: self.C6])]}")
+            if x[self.C6 : self.C7].sum() > 0:
+                print(f"q↓_{i}: {self.s_inv[np.argmax(x[self.C6: self.C7])]}")
+            if x[self.C7 : self.C8].sum() > 0:
+                print(f"γ↓_{i}: {self.g_inv[np.argmax(x[self.C7: self.C8])]}")
+            if x[self.C8 : self.C9].sum() > 0:
+                print(f"a↓_{i}: {self.a_inv[np.argmax(x[self.C8: self.C9])]}")
+            if x[self.C9 : self.C10].sum() > 0:
+                print(f"q↓, a↓, γ↓, y: {self.n_inv[np.argmax(x[self.C9: self.C10])]}")
             print("---------")
 
     def set_up_orderings(self):
@@ -178,10 +185,17 @@ class ContextFreeTransform:
                 np.zeros(self.n_stack_symbols),
                 # ----------------------------
                 self.one_hot(self.q0, "state") if t == 0 else np.zeros(self.n_states),
-                self.one_hot(BOT, "stack")
-                if t == 0
-                else np.zeros(self.n_stack_symbols),
-                np.zeros(self.n_actions),
+                (
+                    self.one_hot(BOT, "stack")
+                    if t == 0
+                    else np.zeros(self.n_stack_symbols)
+                ),
+                (
+                    self.one_hot(Action.PUSH, "action")
+                    if t == 0
+                    else np.zeros(self.n_actions)
+                ),  # It should be PUSH, because you imagine you "pushed" the BOT
+                # self.one_hot(Action.PUSH, "action"),
                 np.zeros(self.D10),
             ]
         )
@@ -189,7 +203,7 @@ class ContextFreeTransform:
         return X0
 
     def positional_encoding(self, t: int) -> np.ndarray:
-        return np.asarray([1, t + 1, 1 / (t + 1)])
+        return np.asarray([1, t + 1, 1 / (t + 1), 1 / (t + 1) ** 2])
 
     def action_encoding(self, a: str) -> np.ndarray:
         if a == "PUSH":
@@ -274,6 +288,7 @@ class ContextFreeTransform:
             return (Wv @ X.T).T
 
         def f(q, k):
+            # print("111111111111111111111111111111111111111111")
             return -np.abs(np.dot(q, k.T))
 
         def O(X):  # noqa: E741, E743
@@ -314,6 +329,8 @@ class ContextFreeTransform:
             return -np.abs(np.dot(q, k.T))
 
         def O(X):  # noqa: E741, E743
+            # print("2222222222222222222222222222222222222222")
+            # print(X[self.C3])
             return X
 
         return AttentionHead(
@@ -332,13 +349,22 @@ class ContextFreeTransform:
         Returns:
             AttentionHead: The transformer head.
         """
-        Wq = np.zeros((2, self.D))
-        Wq[0, self.C1 + 1] = 1
-        bq = np.asarray([0, 1])
+        Wq = np.zeros((4, self.D))
+        Wq[0, self.C3] = 1
+        Wq[1, self.C1 + 2] = 1
+        # Wq[2, self.C1 + 2] = 1
+        # Wq[2, self.C1 + 3] = 1
+        # Wq[2, self.C1 + 3] = 1 / 3
+        bq = np.asarray([0, 0, 1, 1])
 
-        Wk = np.zeros((2, self.D))
-        Wk[1, self.C3] = 1
-        bk = np.asarray([1, 0])
+        Wk = np.zeros((4, self.D))
+        Wk[0, self.C1 + 2] = 1
+        Wk[1, self.C3] = -1
+        # Wk[2, self.C1 + 2] = 1
+        Wk[2, self.C1 + 3] = 1
+        # Wk[2, self.C1 + 3] = 1
+        Wk[3, self.C8 + self.a[Action.PUSH]] = 0
+        Wk[3, self.C8 + self.a[Action.POP]] = -1
 
         Wv = np.zeros((self.D, self.D))
         Wv[self.C5 : self.C6, self.C7 : self.C8] = np.eye(self.n_stack_symbols)
@@ -347,13 +373,22 @@ class ContextFreeTransform:
             return (Wq @ X.T).T + bq
 
         def K(X):
-            return (Wk @ X.T).T + bk
+            self.display_hidden_state(X)
+            return (Wk @ X.T).T
 
         def V(X):
             return (Wv @ X.T).T
 
         def f(q, k):
-            return -np.abs(np.dot(q, k.T))
+            print("0000000000000000000000000000000000000")
+            return (
+                -np.abs(np.dot(q[:2], k[:2].T))
+                - q[-2] * k[-2]
+                - int(abs(q[1] - k[0]) < 1e-6)
+                + q[-1] * k[-1]
+            )
+            # return -np.abs(np.dot(q, k.T))
+            # return np.dot(q, k.T)
 
         def O(X):  # noqa: E741, E743
             return X
@@ -377,10 +412,16 @@ class ContextFreeTransform:
         Wh = np.zeros((self.D, len(heads) * self.D))
         # Copy over all existing information
         Wh[: self.D, : self.D] = np.eye(self.D)
+        Wh[self.C3, self.C3] = 0
         # Copy over the new information about the stack writing positions
         Wh[self.C3, self.D + self.C3] = 1
 
         def fH(Z):
+            print("--------------------------------------")
+            # self.display_hidden_state(Z[:, : self.D])
+            # print("--------------------")
+            self.display_hidden_state(Z[:, self.D : 2 * self.D])
+            print("--------------------------------------")
             return (Wh @ Z.T).T
 
         return MultiHeadAttentionLayer(heads=heads, fH=fH)
@@ -412,6 +453,23 @@ class ContextFreeTransform:
         Wo, bo = self.construct_transition_gates()
 
         def transition(Z):
+            # print(Wo[self.C9 + self.n[(0, Action.POP, "1", "a")], : self.D])
+            # print(Wo[self.C9 + self.n[(0, Action.POP, "1", "a")], self.D : 2 * self.D])
+            # print(Wo[self.C9 + self.n[(0, Action.POP, "1", "a")], 2 * self.D :])
+            # print(Wo[self.C9 + self.n[(0, Action.POP, "1", "a")], self.m["a"]])
+            # print(
+            #     Wo[
+            #         self.C9 + self.n[(0, Action.POP, "1", "a")],
+            #         self.D + self.C2 + self.s[0],
+            #     ]
+            # )
+            # print(
+            #     Wo[
+            #         self.C9 + self.n[(0, Action.POP, "1", "a")],
+            #         2 * self.D + self.C5 + self.g["1"],
+            #     ]
+            # )
+            # print(bo[self.C9 + self.n[(0, Action.POP, "1", "a")]])
             return ReLU((Wo @ Z.T).T + bo)
 
         # Check if the state is already present on the tape
@@ -423,9 +481,9 @@ class ContextFreeTransform:
         # Decode the new state, action, and stack symbol from the transition head
         U = np.zeros((self.D, self.D))
         for q, a, γ, y in product(self.P.Q, self.P.actions, self.P.Γ, self.P.Σ):
-            U[self.C6 + self.s[q], self.n[(q, a, γ, y)]] = 1
-            U[self.C7 + self.g[γ], self.n[(q, a, γ, y)]] = 1
-            U[self.C8 + self.a[a], self.n[(q, a, γ, y)]] = 1
+            U[self.C6 + self.s[q], self.C9 + self.n[(q, a, γ, y)]] = 1
+            U[self.C7 + self.g[γ], self.C9 + self.n[(q, a, γ, y)]] = 1
+            U[self.C8 + self.a[a], self.C9 + self.n[(q, a, γ, y)]] = 1
 
         # Copy the old information
         # If some fields are empty, they will be filled in by the addition
@@ -450,9 +508,19 @@ class ContextFreeTransform:
         H3 = self.construct_stack_top_lookup_head()
         heads = [H1, H2, H3]
 
-        (transition, combine) = self.construct_layer_2_combine_parameters()
+        transition, combine = self.construct_layer_2_combine_parameters()
 
         def fH(Z):
+            print("--------------------------------------")
+            self.display_hidden_state(Z[:, : self.D])
+            print("--------------------")
+            self.display_hidden_state(Z[:, self.D : 2 * self.D])
+            print("--------------------")
+            self.display_hidden_state(Z[:, 2 * self.D :])
+            print("--------------------")
+            print("Transitioned Z:")
+            self.display_hidden_state(transition(Z))
+            print("--------------------------------------")
             return combine(Z, transition(Z))
 
         return MultiHeadAttentionLayer(heads=heads, fH=fH)
@@ -481,8 +549,6 @@ class ContextFreeTransform:
         # Set up the output matrix
         # E = self.construct_output_matrix()
 
-        # Wf = np.zeros((self.n_states, self.D))
-        # Wf[:, self.C2 : self.C3] = np.eye(self.n_states)
         Wf = np.eye(self.D)
 
         def F(x):

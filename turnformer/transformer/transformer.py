@@ -43,20 +43,22 @@ class AttentionHead:
         V = self.V(X)
 
         T = X.shape[0]
-        s = self.projection(np.asarray([self.f(q, K[t, :]) for t in range(T)]))
+        r = np.asarray([self.f(q, K[t, :]) for t in range(T)])
+        s = self.projection(r)
+        print(f"r = {r}")
         print(f"s = {s}")
         a = np.dot(s, V)
-        # print(f"X = {X}")
-        # print(f"q = {q}")
-        # print(f"K = {K}")
+        print(f"X = {X}")
+        print(f"q = {q}")
+        print(f"K = {K}")
         print(f"V = {V}")
-        # print(f"a = {a}")
+        print(f"a = {a}")
 
         # z = self.O(a) + a
         z = self.O(a)
 
-        # print(f"z = {z}")
-        # print()
+        print(f"z = {z}")
+        print()
 
         return z
 
@@ -134,28 +136,26 @@ class Transformer:
         print(f"X0.shape = {X.shape}")
         self.Tf.display_hidden_state(X)
 
-        for t, yt in enumerate(y[1:]):
+        # for t, yt in enumerate(y[1:]):
+        for t, yt in enumerate(y):
             X = np.vstack([X, self.X0(yt, t + 1)])
 
-            print(f"X{t + 1}.shape = {X.shape}")
-            self.Tf.display_hidden_state(X)
+            print(f"\n\nX{t + 1}.shape = {X.shape}")
+            # self.Tf.display_hidden_state(X)
 
             Z = X
             for ll, layer in enumerate(self.layers):
                 Z = layer(Z)
-                print(f"Z{ll}.shape = {Z.shape}")
+                print(f"Z{ll + 1} = {Z}")
+                self.Tf.display_hidden_state(Z)
+                print()
 
             X[-1, :] = Z[-1, :]
-            # print("STATES")
-            # for i in range(X.shape[0]):
-            #     print(f"state {i}: {self.Tf.eq2q(X[i, :])}")
-            # print("SYMBOLS")
-            # for i in range(X.shape[0]):
-            #     print(f"symbol {i}: {self.Tf.ey2y(X[i, :])}")
-            # print()
-            # print()
 
-            # At this point, X[-1, :] should contain the new state (of the automaton)
+            print(f"New X{t + 1}:")
+            self.Tf.display_hidden_state(X)
+            print()
+            print()
 
         return self.F(X[-1, :]).T
 
